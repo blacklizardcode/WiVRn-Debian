@@ -1,0 +1,131 @@
+name: Build WiVRn .deb
+
+# Checks daily for a new upstream WiVRn release. When one appears, it builds a
+# Debian package from it and publishes it as a GitHub release in this repo.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream WiVRn tag to build (empty = latest release)"
+        required: false
+        default: ""
+      force:
+        description: "Rebuild even if a release for this tag already exists"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM: WiVRn/WiVRn
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ]; then
+            tag=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
+          fi
+          echo "Upstream tag: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists, nothing to do."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add more Debian suites here (e.g. sid) to build for them too.
+        suite: [trixie]
+    runs-on: ubuntu-latest
+    container: debian:${{ matrix.suite }}
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      SUITE: ${{ matrix.suite }}
+      DEBIAN_FRONTEND: noninteractive
+      DEBFULLNAME: GitHub Actions
+      DEBEMAIL: actions@github.com
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends \
+            ca-certificates git devscripts equivs build-essential
+
+      - name: Fetch WiVRn source
+        run: git clone --depth 1 --branch "$TAG" "https://github.com/$UPSTREAM.git" wivrn
+
+      - name: Install build dependencies
+        working-directory: wivrn
+        run: |
+          # Packages needed by the build but missing from upstream debian/control
+          apt-get install -y -q --no-install-recommends \
+            libssl-dev libdrm-dev librsvg2-dev libarchive-dev libpng-dev \
+            extra-cmake-modules libkirigami-dev libkf6i18n-dev libkf6coreaddons-dev \
+            libkf6qqc2desktopstyle-dev libkf6iconthemes-dev qt6-declarative-dev \
+            qt6-declarative-private-dev gettext libglib2.0-dev python3 glslc \
+            libcurl4-openssl-dev libfontconfig-dev
+          mk-build-deps -i -r -t 'apt-get -y -q --no-install-recommends' debian/control
+
+      - name: Build package
+        working-directory: wivrn
+        run: |
+          git config --global --add safe.directory '*'
+          # dh_auto_configure disables FetchContent downloads; Monado and the
+          # other bundled libraries must be downloaded during configure.
+          sed -i 's|-DFETCHCONTENT_BASE_DIR|-DFETCHCONTENT_FULLY_DISCONNECTED=OFF -DFETCHCONTENT_BASE_DIR|' debian/rules
+          version="${TAG#v}-1~${SUITE}"
+          dch --create --package wivrn -v "$version" -D "$SUITE" "Automated build of upstream $TAG for Debian $SUITE."
+          dpkg-buildpackage -us -uc -b -j"$(nproc)"
+          mkdir -p ../dist
+          # Skip the (large) debug symbol package
+          find .. -maxdepth 1 -name '*.deb' ! -name '*-dbgsym_*' -exec cp {} ../dist/ \;
+          ls -la ../dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wivrn-${{ matrix.suite }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          ls -la dist
+          notes="Debian packages built from upstream [WiVRn $TAG](https://github.com/$UPSTREAM/releases/tag/$TAG)."
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.deb --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/*.deb -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "WiVRn $TAG for Debian" --notes "$notes"
+          fi
