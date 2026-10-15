@@ -32,4 +32,6 @@ optionally with a specific upstream tag.
 
 ## License
 
-WiVRn is licensed under GPL-3.0. This project is not affiliated with WiVRn.
+This repository is licensed under the GNU General Public License v3.0, the
+same license as WiVRn; see [LICENSE](LICENSE). This project is not affiliated
+with WiVRn.
