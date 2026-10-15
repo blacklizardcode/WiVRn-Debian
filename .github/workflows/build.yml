@@ -83,7 +83,8 @@ jobs:
             extra-cmake-modules libkirigami-dev libkf6i18n-dev libkf6coreaddons-dev \
             libkf6qqc2desktopstyle-dev libkf6iconthemes-dev qt6-declarative-dev \
             qt6-declarative-private-dev gettext libglib2.0-dev python3 glslc \
-            libcurl4-openssl-dev libfontconfig-dev
+            libcurl4-openssl-dev libfontconfig-dev kirigami-addons-dev \
+            qml6-module-org-kde-kirigamiaddons-formcard
           mk-build-deps -i -r -t 'apt-get -y -q --no-install-recommends' debian/control
 
       - name: Build package
