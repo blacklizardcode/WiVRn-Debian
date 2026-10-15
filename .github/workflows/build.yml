@@ -94,6 +94,8 @@ jobs:
           # dh_auto_configure disables FetchContent downloads; Monado and the
           # other bundled libraries must be downloaded during configure.
           sed -i 's|-DFETCHCONTENT_BASE_DIR|-DFETCHCONTENT_FULLY_DISCONNECTED=OFF -DFETCHCONTENT_BASE_DIR|' debian/rules
+          # postinst runs setcap, which comes from libcap2-bin
+          grep -q libcap2-bin debian/control || sed -i 's|^ ${misc:Depends},| ${misc:Depends},\n libcap2-bin,|' debian/control
           version="${TAG#v}-1~${SUITE}"
           dch --create --package wivrn -v "$version" -D "$SUITE" "Automated build of upstream $TAG for Debian $SUITE."
           dpkg-buildpackage -us -uc -b -j"$(nproc)"
